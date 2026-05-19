@@ -12,7 +12,7 @@ def export_to_excel(movies: List[Dict], filepath: str = None):
     ws = wb.active
     ws.title = "电影下载列表"
 
-    headers = ["电影名", "上映年份", "电影分类", "下载链接", "文件大小", "来源网站", "链接类型", "简介", "封面链接"]
+    headers = ["电影名", "上映年份", "电影分类", "下载链接", "文件大小", "来源网站", "链接类型", "简介", "封面链接", "已下载", "已剪辑"]
     ws.append(headers)
 
     # Header style
@@ -32,10 +32,12 @@ def export_to_excel(movies: List[Dict], filepath: str = None):
             movie.get("link_type", ""),
             movie.get("description", ""),
             movie.get("cover_url", ""),
+            "是" if movie.get("is_downloaded") else "否",
+            "是" if movie.get("is_edited") else "否",
         ])
 
     # Auto-adjust column widths
-    column_widths = [25, 12, 15, 60, 12, 12, 12, 40, 40]
+    column_widths = [25, 12, 15, 60, 12, 12, 12, 40, 40, 10, 10]
     for i, width in enumerate(column_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = width
 

@@ -27,12 +27,14 @@ class Deduplicator:
                     UNIQUE(name, year)
                 )
             """)
-            # Migrate: add description and cover_url columns if missing
-            for col in ["description", "cover_url"]:
+            # Migrate: add missing columns
+            text_cols = {"description": "TEXT", "cover_url": "TEXT"}
+            int_cols = {"is_downloaded": "INTEGER DEFAULT 0", "is_edited": "INTEGER DEFAULT 0"}
+            for col, dtype in {**text_cols, **int_cols}.items():
                 try:
                     conn.execute(f"SELECT {col} FROM movies LIMIT 1")
                 except sqlite3.OperationalError:
-                    conn.execute(f"ALTER TABLE movies ADD COLUMN {col} TEXT")
+                    conn.execute(f"ALTER TABLE movies ADD COLUMN {col} {dtype}")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS crawl_state (
@@ -76,23 +78,27 @@ class Deduplicator:
     def _insert(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type, description, cover_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type, description, cover_url, is_downloaded, is_edited)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (movie["name"], movie.get("year", ""), movie.get("genre", ""),
                  movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
                  movie["source"], movie["link_type"], movie.get("description", ""),
-                 movie.get("cover_url", ""))
+                 movie.get("cover_url", ""),
+                 movie.get("is_downloaded", 0),
+                 movie.get("is_edited", 0))
             )
             conn.commit()
 
     def _update(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?, description=?, cover_url=?
+                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?, description=?, cover_url=?, is_downloaded=?, is_edited=?
                    WHERE name=? AND year=?""",
                 (movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
                  movie["source"], movie["link_type"], movie.get("description", ""),
                  movie.get("cover_url", ""),
+                 movie.get("is_downloaded", 0),
+                 movie.get("is_edited", 0),
                  movie["name"], movie.get("year", ""))
             )
             conn.commit()
@@ -125,8 +131,46 @@ class Deduplicator:
             )
             conn.commit()
 
+    def toggle_downloaded(self, name: str, year: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT is_downloaded FROM movies WHERE name=? AND year=?",
+                (name, year)
+            )
+            row = cur.fetchone()
+            new_val = 1 - (row["is_downloaded"] if row else 0)
+            conn.execute(
+                "UPDATE movies SET is_downloaded=? WHERE name=? AND year=?",
+                (new_val, name, year)
+            )
+            conn.commit()
+            return new_val
+
+    def toggle_edited(self, name: str, year: str) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT is_edited FROM movies WHERE name=? AND year=?",
+                (name, year)
+            )
+            row = cur.fetchone()
+            new_val = 1 - (row["is_edited"] if row else 0)
+            conn.execute(
+                "UPDATE movies SET is_edited=? WHERE name=? AND year=?",
+                (new_val, name, year)
+            )
+            conn.commit()
+            return new_val
+
     def get_all(self) -> List[Dict]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.execute("SELECT * FROM movies ORDER BY created_at DESC")
             return [dict(row) for row in cur.fetchall()]
+
+    def clear_all(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM movies")
+            conn.execute("DELETE FROM crawl_state")
+            conn.commit()

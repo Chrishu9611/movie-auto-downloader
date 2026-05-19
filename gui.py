@@ -265,29 +265,72 @@ class MovieDownloaderApp:
                                      font=("Microsoft YaHei", 10))
         self.status_label.pack(side=tk.RIGHT, padx=16)
 
+        # Filter bar
+        filter_bar = tk.Frame(self.root, bg=BG_COLOR)
+        filter_bar.pack(fill=tk.X, padx=16, pady=(8, 0))
+
+        tk.Label(filter_bar, text="分类", bg=BG_COLOR, fg=TEXT_SECONDARY,
+                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+        self.genre_var = tk.StringVar(value="全部")
+        self.genre_combo = ttk.Combobox(filter_bar, textvariable=self.genre_var,
+                                        values=["全部"], width=10, state="readonly",
+                                        font=("Microsoft YaHei", 10))
+        self.genre_combo.pack(side=tk.LEFT, padx=(4, 16))
+        self.genre_combo.bind("<<ComboboxSelected>>", lambda e: self.apply_filters())
+
+        tk.Label(filter_bar, text="年份", bg=BG_COLOR, fg=TEXT_SECONDARY,
+                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+        self.year_from_var = tk.StringVar()
+        self.year_from_var.trace_add("write", lambda *args: self.apply_filters())
+        tk.Entry(filter_bar, textvariable=self.year_from_var, width=6,
+                 relief="flat", bd=1, highlightthickness=1,
+                 highlightbackground=BORDER, bg=CARD_BG, fg=TEXT,
+                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT, padx=(4, 4))
+
+        tk.Label(filter_bar, text="-", bg=BG_COLOR, fg=TEXT_SECONDARY,
+                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+
+        self.year_to_var = tk.StringVar()
+        self.year_to_var.trace_add("write", lambda *args: self.apply_filters())
+        tk.Entry(filter_bar, textvariable=self.year_to_var, width=6,
+                 relief="flat", bd=1, highlightthickness=1,
+                 highlightbackground=BORDER, bg=CARD_BG, fg=TEXT,
+                 font=("Microsoft YaHei", 10)).pack(side=tk.LEFT, padx=(4, 16))
+
+        tk.Button(filter_bar, text="重置筛选", command=self.reset_filters,
+                  bg=CARD_BG, fg=TEXT_SECONDARY, activebackground=HOVER_BG,
+                  activeforeground=TEXT, relief="flat", bd=1,
+                  highlightthickness=0, cursor="hand2",
+                  font=("Microsoft YaHei", 10),
+                  highlightbackground=BORDER, padx=8, pady=4).pack(side=tk.LEFT)
+
         # Table card
         table_card = tk.Frame(self.root, bg=CARD_BG, padx=1, pady=1)
         table_card.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
         # Treeview
-        columns = ("name", "year", "genre", "size", "source", "link_type")
+        columns = ("name", "year", "genre", "size", "source", "link_type", "is_downloaded", "is_edited")
         self.tree = ttk.Treeview(table_card, columns=columns, show="tree headings",
                                  selectmode="browse")
         self.tree.heading("#0", text="")
-        self.tree.column("#0", width=48, anchor="center", minwidth=48)
+        self.tree.column("#0", width=48, anchor="center", minwidth=48, stretch=False)
 
         self.tree.heading("name", text="电影名")
-        self.tree.column("name", width=240, anchor="w")
+        self.tree.column("name", width=200, anchor="w", stretch=False)
         self.tree.heading("year", text="年份")
-        self.tree.column("year", width=60, anchor="center")
+        self.tree.column("year", width=50, anchor="center", stretch=False)
         self.tree.heading("genre", text="分类")
-        self.tree.column("genre", width=80, anchor="center")
+        self.tree.column("genre", width=70, anchor="center", stretch=False)
         self.tree.heading("size", text="文件大小")
-        self.tree.column("size", width=90, anchor="center")
+        self.tree.column("size", width=80, anchor="center", stretch=False)
         self.tree.heading("source", text="来源")
-        self.tree.column("source", width=80, anchor="center")
+        self.tree.column("source", width=70, anchor="center", stretch=False)
         self.tree.heading("link_type", text="链接类型")
-        self.tree.column("link_type", width=100, anchor="center")
+        self.tree.column("link_type", width=90, anchor="center", stretch=False)
+        self.tree.heading("is_downloaded", text="已下载")
+        self.tree.column("is_downloaded", width=60, anchor="center", stretch=False)
+        self.tree.heading("is_edited", text="已剪辑")
+        self.tree.column("is_edited", width=60, anchor="center", stretch=False)
 
         # Scrollbar
         vsb = ttk.Scrollbar(table_card, orient="vertical", command=self.tree.yview)
@@ -309,8 +352,9 @@ class MovieDownloaderApp:
 
     def load_data(self):
         self.movies = self.dedup.get_all()
-        self.refresh_table(self.movies)
-        self.update_status()
+        genres = sorted({m.get("genre", "") for m in self.movies if m.get("genre")})
+        self.genre_combo.config(values=["全部"] + genres)
+        self.apply_filters()
 
     def refresh_table(self, movies):
         for item in self.tree.get_children():
@@ -328,18 +372,51 @@ class MovieDownloaderApp:
                 movie.get("size", ""),
                 movie.get("source", ""),
                 movie.get("link_type", ""),
+                "☑" if movie.get("is_downloaded") else "☐",
+                "☑" if movie.get("is_edited") else "☐",
             ))
         self.update_status()
 
-    def on_search(self):
+    def apply_filters(self):
         keyword = self.search_var.get().strip().lower()
-        if not keyword:
-            self.refresh_table(self.movies)
-            return
-        filtered = [m for m in self.movies if keyword in m.get("name", "").lower()
-                    or keyword in m.get("year", "").lower()
-                    or keyword in m.get("genre", "").lower()]
+        genre = self.genre_var.get()
+        year_from = self.year_from_var.get().strip()
+        year_to = self.year_to_var.get().strip()
+
+        filtered = self.movies
+
+        if genre and genre != "全部":
+            filtered = [m for m in filtered if m.get("genre", "") == genre]
+
+        if year_from:
+            try:
+                yf = int(year_from)
+                filtered = [m for m in filtered if m.get("year", "") and int(m.get("year", 0)) >= yf]
+            except ValueError:
+                pass
+        if year_to:
+            try:
+                yt = int(year_to)
+                filtered = [m for m in filtered if m.get("year", "") and int(m.get("year", 0)) <= yt]
+            except ValueError:
+                pass
+
+        if keyword:
+            filtered = [m for m in filtered if keyword in m.get("name", "").lower()
+                        or keyword in m.get("year", "").lower()
+                        or keyword in m.get("genre", "").lower()]
+
         self.refresh_table(filtered)
+
+    def reset_filters(self):
+        self.search_var.set("")
+        self.genre_var.set("全部")
+        self.year_from_var.set("")
+        self.year_to_var.set("")
+        self.apply_filters()
+
+    def on_search(self):
+        self.apply_filters()
 
     def on_tree_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -348,7 +425,6 @@ class MovieDownloaderApp:
             return
 
         col = self.tree.identify_column(event.x)
-        # Toggle checkbox only when clicking first column or tree region
         if region == "tree" or col == "#0":
             if iid in self.checked_ids:
                 self.checked_ids.discard(iid)
@@ -359,6 +435,32 @@ class MovieDownloaderApp:
                 if self.icons.checked:
                     self.tree.item(iid, image=self.icons.checked)
             self.update_status()
+        elif col == "#7":  # is_downloaded
+            self._toggle_status(iid, "is_downloaded")
+        elif col == "#8":  # is_edited
+            self._toggle_status(iid, "is_edited")
+
+    def _toggle_status(self, iid, field):
+        idx = int(iid)
+        if 0 <= idx < len(self.filtered_movies):
+            movie = self.filtered_movies[idx]
+            name = movie.get("name", "")
+            year = movie.get("year", "")
+            if field == "is_downloaded":
+                new_val = self.dedup.toggle_downloaded(name, year)
+            else:
+                new_val = self.dedup.toggle_edited(name, year)
+
+            movie[field] = new_val
+            for m in self.movies:
+                if m.get("name") == name and m.get("year") == year:
+                    m[field] = new_val
+                    break
+
+            col_map = {"is_downloaded": 6, "is_edited": 7}
+            values = list(self.tree.item(iid, "values"))
+            values[col_map[field]] = "☑" if new_val else "☐"
+            self.tree.item(iid, values=values)
 
     def on_tree_hover(self, event):
         iid = self.tree.identify_row(event.y)

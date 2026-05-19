@@ -2,6 +2,7 @@ import re
 from typing import List, Dict, Optional
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 from src.crawler import BaseCrawler
 import config
 
@@ -10,27 +11,46 @@ class HdzuCrawler(BaseCrawler):
     def __init__(self):
         super().__init__("hdzu", config.SITES["hdzu"]["base_url"])
 
-    def crawl(self, limit: int = 10) -> List[Dict]:
-        url = self.base_url + "/"
-        print(f"[{self.name}] Crawling homepage -> {url}")
-
-        soup = self.get_soup(url)
-        if not soup:
-            return []
+    def crawl(self, limit: int = None, dedup=None) -> List[Dict]:
+        print(f"[{self.name}] Crawling with pagination")
 
         movies = []
-        entries = soup.find_all("li", class_="movie-item")
-        if not entries:
-            entries = soup.select("li.topic-item.media.movie-item")
+        page = 1
+        stop = False
 
-        for entry in entries[:limit]:
-            movie = self._parse_entry(entry)
-            if movie:
-                movies.append(movie)
+        while not stop:
+            url = self.base_url + "/"
+            if page > 1:
+                url = f"{self.base_url}/?page={page}"
+
+            soup = self.get_soup(url)
+            if not soup:
+                break
+
+            entries = soup.find_all("li", class_="movie-item")
+            if not entries:
+                entries = soup.select("li.topic-item.media.movie-item")
+
+            if not entries:
+                break
+
+            for entry in entries:
+                if limit and len(movies) >= limit:
+                    stop = True
+                    break
+
+                movie = self._parse_entry(entry, dedup)
+                if movie:
+                    movies.append(movie)
+
+            if len(entries) < 10:
+                break
+
+            page += 1
 
         return movies
 
-    def _parse_entry(self, entry: BeautifulSoup) -> Optional[Dict]:
+    def _parse_entry(self, entry: BeautifulSoup, dedup=None) -> Optional[Dict]:
         title_tag = entry.find("h2", class_="topic-title")
         if not title_tag:
             return None
@@ -49,6 +69,10 @@ class HdzuCrawler(BaseCrawler):
         if not info or not info.get("links"):
             return None
 
+        # Incremental check
+        if dedup and dedup.check_exists(name, info.get("year", "")):
+            return None
+
         best_link = self._select_best_link(info["links"])
 
         return {
@@ -60,6 +84,7 @@ class HdzuCrawler(BaseCrawler):
             "size_bytes": best_link.get("size_bytes", 0),
             "source": self.name,
             "link_type": best_link.get("type", "未知"),
+            "description": info.get("description", ""),
         }
 
     def _crawl_detail(self, url: str) -> Dict:
@@ -67,7 +92,7 @@ class HdzuCrawler(BaseCrawler):
         if not soup:
             return {}
 
-        info = {"year": "", "genre": "", "links": []}
+        info = {"year": "", "genre": "", "links": [], "description": ""}
 
         # Parse year, region, genre from movie info section
         movie_info = soup.find("div", class_="movie-info")
@@ -82,6 +107,22 @@ class HdzuCrawler(BaseCrawler):
                     parts = text.replace("◎类　　别", "").replace("◎类别", "").strip().split("/")
                     info["genre"] = parts[0].strip() if parts else ""
 
+        # Parse description
+        content_des = soup.find("p", class_="content-des")
+        if content_des:
+            info["description"] = content_des.get_text(strip=True)[:500]
+        else:
+            # Fallback: look for intro paragraph after 简介 header
+            intro_started = False
+            for elem in soup.find_all(["p", "div"]):
+                text = elem.get_text(strip=True)
+                if "◎简　　介" in text or "简介" in text:
+                    intro_started = True
+                    continue
+                if intro_started and len(text) > 30:
+                    info["description"] = text[:500]
+                    break
+
         # Parse download links
         movie_url_div = soup.find("div", class_="movie-url")
         if movie_url_div:
@@ -94,7 +135,6 @@ class HdzuCrawler(BaseCrawler):
                         title = a_tag.get("title", "")
                         text = a_tag.get_text(strip=True)
 
-                        # Extract size from text like [13.66GB]
                         size_str = ""
                         size_bytes = 0
                         size_match = re.search(r"\[([^\]]+)\]", text)

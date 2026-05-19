@@ -21,8 +21,25 @@ class Deduplicator:
                     size_bytes REAL,
                     source TEXT,
                     link_type TEXT,
+                    description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(name, year)
+                )
+            """)
+            # Migrate: add description column if missing
+            try:
+                conn.execute("SELECT description FROM movies LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE movies ADD COLUMN description TEXT")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS crawl_state (
+                    site TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    last_page INTEGER DEFAULT 0,
+                    last_movie_id TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (site, category)
                 )
             """)
             conn.commit()
@@ -57,22 +74,50 @@ class Deduplicator:
     def _insert(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type, description)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (movie["name"], movie.get("year", ""), movie.get("genre", ""),
                  movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
-                 movie["source"], movie["link_type"])
+                 movie["source"], movie["link_type"], movie.get("description", ""))
             )
             conn.commit()
 
     def _update(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?
+                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?, description=?
                    WHERE name=? AND year=?""",
                 (movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
-                 movie["source"], movie["link_type"],
+                 movie["source"], movie["link_type"], movie.get("description", ""),
                  movie["name"], movie.get("year", ""))
+            )
+            conn.commit()
+
+    def check_exists(self, name: str, year: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute("SELECT 1 FROM movies WHERE name=? AND year=?", (name, year))
+            return cur.fetchone() is not None
+
+    def get_crawl_state(self, site: str, category: str) -> Dict:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT * FROM crawl_state WHERE site=? AND category=?",
+                (site, category)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {"last_page": 0, "last_movie_id": ""}
+
+    def set_crawl_state(self, site: str, category: str, last_page: int, last_movie_id: str = ""):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT INTO crawl_state (site, category, last_page, last_movie_id, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(site, category) DO UPDATE SET
+                   last_page=excluded.last_page,
+                   last_movie_id=excluded.last_movie_id,
+                   updated_at=CURRENT_TIMESTAMP""",
+                (site, category, last_page, last_movie_id)
             )
             conn.commit()
 

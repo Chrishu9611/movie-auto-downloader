@@ -10,28 +10,54 @@ class CNmkvCrawler(BaseCrawler):
     def __init__(self):
         super().__init__("cnmkv", config.SITES["cnmkv"]["base_url"])
 
-    def crawl_category(self, cat_key: str, limit: int = 10) -> List[Dict]:
+    def crawl_category(self, cat_key: str, limit: int = None, dedup=None) -> List[Dict]:
         cat_info = config.SITES["cnmkv"]["categories"][cat_key]
-        url = urljoin(self.base_url + "/", cat_info["path"].lstrip("/"))
-        print(f"[{self.name}] Crawling category: {cat_info['name']} -> {url}")
-
-        soup = self.get_soup(url)
-        if not soup:
-            return []
+        base_path = cat_info["path"].rstrip("/")
+        print(f"[{self.name}] Crawling category: {cat_info['name']}")
 
         movies = []
-        entries = soup.find_all("article", class_="entry") or soup.find_all("div", class_="entry")
-        if not entries:
-            entries = soup.select(".post,.item,.entry")
+        page = 1
+        stop = False
 
-        for entry in entries[:limit]:
-            movie = self._parse_entry(entry)
-            if movie:
-                movies.append(movie)
+        while not stop:
+            if page == 1:
+                url = urljoin(self.base_url + "/", base_path.lstrip("/"))
+            else:
+                url = urljoin(self.base_url + "/", f"{base_path}/page/{page}/".lstrip("/"))
+
+            soup = self.get_soup(url)
+            if not soup:
+                break
+
+            entries = soup.find_all("article", class_="entry") or soup.find_all("div", class_="entry")
+            if not entries:
+                entries = soup.select(".post,.item,.entry")
+
+            if not entries:
+                break
+
+            for entry in entries:
+                if limit and len(movies) >= limit:
+                    stop = True
+                    break
+
+                movie = self._parse_entry(entry, dedup)
+                if movie:
+                    movies.append(movie)
+                elif dedup:
+                    # If movie skipped due to dedup, continue; if page empty of new, stop
+                    pass
+
+            # If we got fewer entries than expected or page has no new movies, break
+            # WordPress pages usually have consistent count; if less, might be last page
+            if len(entries) < 5:
+                break
+
+            page += 1
 
         return movies
 
-    def _parse_entry(self, entry: BeautifulSoup) -> Optional[Dict]:
+    def _parse_entry(self, entry: BeautifulSoup, dedup=None) -> Optional[Dict]:
         title_tag = entry.find("h2", class_="entry-title")
         if not title_tag:
             title_tag = entry.find("h2")
@@ -49,7 +75,11 @@ class CNmkvCrawler(BaseCrawler):
         if not name:
             return None
 
-        links = self._crawl_detail(detail_url)
+        # Incremental check
+        if dedup and dedup.check_exists(name, year):
+            return None
+
+        links, description = self._crawl_detail(detail_url)
         if not links:
             return None
 
@@ -64,6 +94,7 @@ class CNmkvCrawler(BaseCrawler):
             "size_bytes": best_link.get("size_bytes", 0),
             "source": self.name,
             "link_type": best_link.get("type", "未知"),
+            "description": description,
         }
 
     def _parse_title(self, title: str):
@@ -95,16 +126,19 @@ class CNmkvCrawler(BaseCrawler):
 
         return "", "", "", title.replace("高清下载", "").strip()
 
-    def _crawl_detail(self, url: str) -> List[Dict]:
+    def _crawl_detail(self, url: str):
         soup = self.get_soup(url)
         if not soup:
-            return []
+            return [], ""
 
         content = soup.find("div", class_="entry-content")
         if not content:
             content = soup.find("article") or soup
 
         links = []
+        description = ""
+
+        # Extract links
         for a in content.find_all("a", href=True):
             href = a["href"]
             text = a.get_text(strip=True)
@@ -116,7 +150,25 @@ class CNmkvCrawler(BaseCrawler):
             elif "pan.xunlei.com" in href:
                 links.append({"url": href, "type": "迅雷网盘", "size": "", "size_bytes": 0})
 
-        return links
+        # Extract description: get text paragraphs before download links
+        desc_parts = []
+        for elem in content.children:
+            if isinstance(elem, str):
+                continue
+            tag_name = getattr(elem, "name", "")
+            if tag_name == "p":
+                text = elem.get_text(strip=True)
+                # Skip if it contains download links or is too short
+                if text and len(text) > 20 and not any(k in text for k in ["网盘", "下载", "迅雷", "magnet", "quark", "baidu"]):
+                    desc_parts.append(text)
+            elif tag_name in ["div", "span"] and elem.find("a", href=True):
+                # Stop at download link containers
+                break
+
+        if desc_parts:
+            description = desc_parts[0][:500]
+
+        return links, description
 
     def _select_best_link(self, links: List[Dict]) -> Dict:
         priority = {"夸克网盘": 0, "百度网盘": 1, "迅雷网盘": 2}

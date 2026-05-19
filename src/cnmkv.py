@@ -150,23 +150,23 @@ class CNmkvCrawler(BaseCrawler):
             elif "pan.xunlei.com" in href:
                 links.append({"url": href, "type": "迅雷网盘", "size": "", "size_bytes": 0})
 
-        # Extract description: get text paragraphs before download links
-        desc_parts = []
-        for elem in content.children:
-            if isinstance(elem, str):
-                continue
-            tag_name = getattr(elem, "name", "")
-            if tag_name == "p":
-                text = elem.get_text(strip=True)
-                # Skip if it contains download links or is too short
-                if text and len(text) > 20 and not any(k in text for k in ["网盘", "下载", "迅雷", "magnet", "quark", "baidu"]):
-                    desc_parts.append(text)
-            elif tag_name in ["div", "span"] and elem.find("a", href=True):
-                # Stop at download link containers
-                break
-
-        if desc_parts:
-            description = desc_parts[0][:500]
+        # Extract description from entry-content div text
+        # cnmkv puts synopsis in the first div inside entry-content, format: "...剧情简介：..."
+        first_div = content.find("div")
+        if first_div:
+            div_text = first_div.get_text(strip=True)
+            # Look for "剧情简介：" or "剧情简介"
+            for marker in ["剧情简介：", "剧情简介", "简介："]:
+                idx = div_text.find(marker)
+                if idx != -1:
+                    desc = div_text[idx + len(marker):].strip()
+                    # Remove trailing download links text
+                    for dl_marker in ["https://pan.", "更新", "下载"]:
+                        dl_idx = desc.find(dl_marker)
+                        if dl_idx != -1:
+                            desc = desc[:dl_idx].strip()
+                    description = desc[:500]
+                    break
 
         return links, description
 

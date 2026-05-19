@@ -108,20 +108,23 @@ class HdzuCrawler(BaseCrawler):
                     info["genre"] = parts[0].strip() if parts else ""
 
         # Parse description
-        content_des = soup.find("p", class_="content-des")
-        if content_des:
-            info["description"] = content_des.get_text(strip=True)[:500]
-        else:
-            # Fallback: look for intro paragraph after 简介 header
-            intro_started = False
-            for elem in soup.find_all(["p", "div"]):
-                text = elem.get_text(strip=True)
-                if "◎简　　介" in text or "简介" in text:
-                    intro_started = True
-                    continue
-                if intro_started and len(text) > 30:
-                    info["description"] = text[:500]
-                    break
+        # hdzu puts synopsis in a p tag inside panel-body div, usually the longest paragraph
+        panel_body = soup.find("div", class_="panel-body")
+        if panel_body:
+            longest_text = ""
+            for p in panel_body.find_all("p"):
+                text = p.get_text(strip=True)
+                # Skip short paragraphs and metadata paragraphs with ◎ markers
+                if len(text) > len(longest_text) and len(text) > 50 and "◎" not in text[:10]:
+                    longest_text = text
+            if longest_text:
+                info["description"] = longest_text[:500]
+
+        # Fallback: p.content-des
+        if not info["description"]:
+            content_des = soup.find("p", class_="content-des")
+            if content_des:
+                info["description"] = content_des.get_text(strip=True)[:500]
 
         # Parse download links
         movie_url_div = soup.find("div", class_="movie-url")

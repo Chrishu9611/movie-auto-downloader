@@ -10,7 +10,7 @@ class CNmkvCrawler(BaseCrawler):
     def __init__(self):
         super().__init__("cnmkv", config.SITES["cnmkv"]["base_url"])
 
-    def crawl_category(self, cat_key: str, limit: int = None, dedup=None) -> List[Dict]:
+    def crawl_category(self, cat_key: str, limit: int = None, dedup=None, on_page=None) -> List[Dict]:
         cat_info = config.SITES["cnmkv"]["categories"][cat_key]
         base_path = cat_info["path"].rstrip("/")
         print(f"[{self.name}] Crawling category: {cat_info['name']}")
@@ -36,6 +36,7 @@ class CNmkvCrawler(BaseCrawler):
             if not entries:
                 break
 
+            page_movies = []
             for entry in entries:
                 if limit and len(movies) >= limit:
                     stop = True
@@ -44,9 +45,13 @@ class CNmkvCrawler(BaseCrawler):
                 movie = self._parse_entry(entry, dedup)
                 if movie:
                     movies.append(movie)
+                    page_movies.append(movie)
                 elif dedup:
                     # If movie skipped due to dedup, continue; if page empty of new, stop
                     pass
+
+            if on_page and page_movies:
+                on_page(page, page_movies)
 
             # If we got fewer entries than expected or page has no new movies, break
             # WordPress pages usually have consistent count; if less, might be last page

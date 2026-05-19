@@ -186,6 +186,7 @@ class MovieDownloaderApp:
         self.tooltip = MovieTooltip(self.root)
         self._hover_job = None
         self._last_hover_iid = None
+        self._crawl_stop = False
 
         self.icons = CheckboxIcons(self.root)
         self._create_ui()
@@ -501,33 +502,55 @@ class MovieDownloaderApp:
             self._open_link(movie)
 
     def on_crawl(self):
+        self._crawl_stop = False
+        before_count = len(self.dedup.get_all())
+
+        def on_page(source, category, page, page_movies):
+            if not page_movies:
+                return
+            new_movies = self.dedup.deduplicate(page_movies)
+            msg = f"[{source}] {category} 第{page}页 | 本页新增 {len(new_movies)} 部"
+            self.root.after(0, lambda m=msg: self.set_status(m, PRIMARY))
+            self.root.after(0, self.load_data)
+
         def crawl_task():
-            self.set_status("正在爬取...", PRIMARY)
+            self.set_status("正在初始化爬取...", PRIMARY)
             try:
-                all_new = []
                 cnmkv = CNmkvCrawler()
                 for cat_key in config.SITES["cnmkv"]["categories"]:
-                    movies = cnmkv.crawl_category(cat_key, limit=None, dedup=self.dedup)
-                    all_new.extend(movies)
+                    if self._crawl_stop:
+                        break
+                    cat_name = config.SITES["cnmkv"]["categories"][cat_key]["name"]
+                    cnmkv.crawl_category(
+                        cat_key, limit=None, dedup=self.dedup,
+                        on_page=lambda p, m, c=cat_name: on_page("cnmkv", c, p, m)
+                    )
                     time.sleep(2)
 
-                hdzu = HdzuCrawler()
-                hdzu_movies = hdzu.crawl(limit=None, dedup=self.dedup)
-                all_new.extend(hdzu_movies)
+                if not self._crawl_stop:
+                    hdzu = HdzuCrawler()
+                    hdzu.crawl(
+                        limit=None, dedup=self.dedup,
+                        on_page=lambda p, m: on_page("hdzu", "全部", p, m)
+                    )
 
-                if all_new:
-                    self.dedup.deduplicate(all_new)
-
-                self.root.after(0, lambda: self._crawl_done(len(all_new)))
+                self.root.after(0, lambda bc=before_count: self._crawl_done(bc))
             except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"爬取出错: {e}", DANGER))
+                self.root.after(0, lambda: self._crawl_error(str(e)))
 
         threading.Thread(target=crawl_task, daemon=True).start()
 
-    def _crawl_done(self, count):
+    def _crawl_done(self, before_count):
         self.load_data()
-        self.set_status(f"爬取完成，新增 {count} 部电影", "#34C759")
-        messagebox.showinfo("完成", f"爬取完成！\n新增 {count} 部电影。")
+        total = len(self.movies)
+        new_count = total - before_count
+        self.set_status(f"爬取完成，新增 {new_count} 部电影 | 共 {total} 部", "#34C759")
+        messagebox.showinfo("完成", f"爬取完成！\n新增 {new_count} 部电影。\n数据库共 {total} 部。")
+
+    def _crawl_error(self, msg):
+        self.load_data()
+        self.set_status(f"爬取出错: {msg}", DANGER)
+        messagebox.showerror("错误", f"爬取过程中出现错误:\n{msg}")
 
     def on_download(self):
         if not self.checked_ids:

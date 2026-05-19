@@ -11,7 +11,7 @@ class HdzuCrawler(BaseCrawler):
     def __init__(self):
         super().__init__("hdzu", config.SITES["hdzu"]["base_url"])
 
-    def crawl(self, limit: int = None, dedup=None) -> List[Dict]:
+    def crawl(self, limit: int = None, dedup=None, on_page=None) -> List[Dict]:
         print(f"[{self.name}] Crawling with pagination")
 
         movies = []
@@ -34,6 +34,7 @@ class HdzuCrawler(BaseCrawler):
             if not entries:
                 break
 
+            page_movies = []
             for entry in entries:
                 if limit and len(movies) >= limit:
                     stop = True
@@ -42,6 +43,10 @@ class HdzuCrawler(BaseCrawler):
                 movie = self._parse_entry(entry, dedup)
                 if movie:
                     movies.append(movie)
+                    page_movies.append(movie)
+
+            if on_page and page_movies:
+                on_page(page, page_movies)
 
             if len(entries) < 10:
                 break

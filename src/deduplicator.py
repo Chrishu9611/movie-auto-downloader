@@ -22,15 +22,17 @@ class Deduplicator:
                     source TEXT,
                     link_type TEXT,
                     description TEXT,
+                    cover_url TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(name, year)
                 )
             """)
-            # Migrate: add description column if missing
-            try:
-                conn.execute("SELECT description FROM movies LIMIT 1")
-            except sqlite3.OperationalError:
-                conn.execute("ALTER TABLE movies ADD COLUMN description TEXT")
+            # Migrate: add description and cover_url columns if missing
+            for col in ["description", "cover_url"]:
+                try:
+                    conn.execute(f"SELECT {col} FROM movies LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn.execute(f"ALTER TABLE movies ADD COLUMN {col} TEXT")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS crawl_state (
@@ -74,21 +76,23 @@ class Deduplicator:
     def _insert(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type, description)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO movies (name, year, genre, link, size, size_bytes, source, link_type, description, cover_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (movie["name"], movie.get("year", ""), movie.get("genre", ""),
                  movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
-                 movie["source"], movie["link_type"], movie.get("description", ""))
+                 movie["source"], movie["link_type"], movie.get("description", ""),
+                 movie.get("cover_url", ""))
             )
             conn.commit()
 
     def _update(self, movie: Dict):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?, description=?
+                """UPDATE movies SET link=?, size=?, size_bytes=?, source=?, link_type=?, description=?, cover_url=?
                    WHERE name=? AND year=?""",
                 (movie["link"], movie.get("size", ""), movie.get("size_bytes", 0),
                  movie["source"], movie["link_type"], movie.get("description", ""),
+                 movie.get("cover_url", ""),
                  movie["name"], movie.get("year", ""))
             )
             conn.commit()

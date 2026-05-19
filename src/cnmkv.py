@@ -79,9 +79,18 @@ class CNmkvCrawler(BaseCrawler):
         if dedup and dedup.check_exists(name, year):
             return None
 
-        links, description = self._crawl_detail(detail_url)
+        # Extract cover image from entry
+        cover_url = ""
+        img_tag = entry.find("img")
+        if img_tag and img_tag.get("src"):
+            cover_url = urljoin(self.base_url + "/", img_tag["src"].lstrip("/"))
+
+        links, description, detail_cover = self._crawl_detail(detail_url)
         if not links:
             return None
+
+        if not cover_url and detail_cover:
+            cover_url = detail_cover
 
         best_link = self._select_best_link(links)
 
@@ -95,6 +104,7 @@ class CNmkvCrawler(BaseCrawler):
             "source": self.name,
             "link_type": best_link.get("type", "未知"),
             "description": description,
+            "cover_url": cover_url,
         }
 
     def _parse_title(self, title: str):
@@ -129,7 +139,7 @@ class CNmkvCrawler(BaseCrawler):
     def _crawl_detail(self, url: str):
         soup = self.get_soup(url)
         if not soup:
-            return [], ""
+            return [], "", ""
 
         content = soup.find("div", class_="entry-content")
         if not content:
@@ -137,6 +147,12 @@ class CNmkvCrawler(BaseCrawler):
 
         links = []
         description = ""
+        cover_url = ""
+
+        # Extract cover from detail page
+        img_in_content = content.find("img")
+        if img_in_content and img_in_content.get("src"):
+            cover_url = img_in_content["src"]
 
         # Extract links
         for a in content.find_all("a", href=True):
@@ -151,16 +167,13 @@ class CNmkvCrawler(BaseCrawler):
                 links.append({"url": href, "type": "迅雷网盘", "size": "", "size_bytes": 0})
 
         # Extract description from entry-content div text
-        # cnmkv puts synopsis in the first div inside entry-content, format: "...剧情简介：..."
         first_div = content.find("div")
         if first_div:
             div_text = first_div.get_text(strip=True)
-            # Look for "剧情简介：" or "剧情简介"
             for marker in ["剧情简介：", "剧情简介", "简介："]:
                 idx = div_text.find(marker)
                 if idx != -1:
                     desc = div_text[idx + len(marker):].strip()
-                    # Remove trailing download links text
                     for dl_marker in ["https://pan.", "更新", "下载"]:
                         dl_idx = desc.find(dl_marker)
                         if dl_idx != -1:
@@ -168,7 +181,7 @@ class CNmkvCrawler(BaseCrawler):
                     description = desc[:500]
                     break
 
-        return links, description
+        return links, description, cover_url
 
     def _select_best_link(self, links: List[Dict]) -> Dict:
         priority = {"夸克网盘": 0, "百度网盘": 1, "迅雷网盘": 2}

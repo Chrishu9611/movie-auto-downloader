@@ -65,6 +65,12 @@ class HdzuCrawler(BaseCrawler):
 
         name = a_tag.get_text(strip=True)
 
+        # Extract cover from entry
+        cover_url = ""
+        img_tag = entry.find("img", class_="list-pic")
+        if img_tag and img_tag.get("src"):
+            cover_url = urljoin(self.base_url + "/", img_tag["src"].lstrip("/"))
+
         info = self._crawl_detail(detail_url)
         if not info or not info.get("links"):
             return None
@@ -85,6 +91,7 @@ class HdzuCrawler(BaseCrawler):
             "source": self.name,
             "link_type": best_link.get("type", "未知"),
             "description": info.get("description", ""),
+            "cover_url": cover_url,
         }
 
     def _crawl_detail(self, url: str) -> Dict:
